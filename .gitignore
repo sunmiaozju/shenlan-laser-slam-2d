@@ -1,0 +1,6 @@
+*.pcd
+*.bag
+**/build/
+**/devel/
+**/.vscode/
+

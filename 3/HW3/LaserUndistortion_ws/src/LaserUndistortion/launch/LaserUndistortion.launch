@@ -1,0 +1,4 @@
+<launch>
+   <param name="use_sim_time" value="true"/>
+   <node name="LaserUndistortion_Node" pkg="LaserUndistortion"  type="LaserUndistortion_node" output="screen" />
+</launch>
