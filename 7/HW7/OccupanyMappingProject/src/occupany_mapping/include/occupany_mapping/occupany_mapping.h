@@ -13,7 +13,12 @@
 typedef struct gridindex_ {
     int x;
     int y;
-
+    gridindex_() {}
+    gridindex_(int x_, int y_)
+    {
+        x = x_;
+        y = y_;
+    }
     void SetIndex(int x_, int y_)
     {
         x = x_;
@@ -33,7 +38,7 @@ typedef struct map_params {
 MapParams mapParams;
 
 int* pMap;
-
+int* pMapIsAccessed;
 unsigned long* pMapHits;
 unsigned long* pMapMisses;
 

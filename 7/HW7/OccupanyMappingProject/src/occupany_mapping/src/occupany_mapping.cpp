@@ -5,6 +5,7 @@
 #include "sensor_msgs/PointCloud2.h"
 #include <climits>
 #include <cmath>
+#include <queue>
 
 using namespace std;
 
@@ -90,7 +91,8 @@ void SetMapParams(void)
     mapParams.offset_x = 500;
     mapParams.offset_y = 500;
 
-    //每次被击中的log变化值，覆盖栅格建图算法需要的参数
+    // 覆盖栅格建图算法需要的参数
+    //每次被击中的log变化值，
     mapParams.log_free = -1;
     mapParams.log_occ = 2;
 
@@ -155,6 +157,7 @@ void OccupanyMapping(std::vector<GeneralLaserScan>& scans, std::vector<Eigen::Ve
 {
     std::cout << "开始建图，请稍后..." << std::endl;
     //枚举所有的激光雷达数据
+
     for (int i = 0; i < scans.size(); i++) {
         GeneralLaserScan scan = scans[i];
         Eigen::Vector3d robotPose = robot_poses[i];
@@ -178,6 +181,7 @@ void OccupanyMapping(std::vector<GeneralLaserScan>& scans, std::vector<Eigen::Ve
             double world_y = sin(theta) * laser_x + cos(theta) * laser_y + robotPose(1);
 
             //start of TODO 对对应的map的cell信息进行更新．（1,2,3题内容）
+
             GridIndex grid_x_y = ConvertWorld2GridIndex(world_x, world_y);
 
             if (isValidGridIndex(grid_x_y) == false)
@@ -189,6 +193,7 @@ void OccupanyMapping(std::vector<GeneralLaserScan>& scans, std::vector<Eigen::Ve
             std::vector<GridIndex> miss_grids = TraceLine(robotPose_grid.x, robotPose_grid.y, grid_x_y.x, grid_x_y.y);
 
 #ifdef PROBLEM_1
+            // 更新被经过的点
             for (size_t j = 0; j < miss_grids.size(); j++) {
                 GridIndex tmpIndex = miss_grids[j];
                 int linear_index = GridIndexToLinearIndex(tmpIndex);
@@ -203,7 +208,7 @@ void OccupanyMapping(std::vector<GeneralLaserScan>& scans, std::vector<Eigen::Ve
 #endif // PROBLEM_1
 
 #ifdef PROBLEM_2
-
+            // 更新被经过的点
             for (size_t j = 0; j < miss_grids.size(); j++) {
                 GridIndex tmpIndex = miss_grids[j];
                 int linear_index = GridIndexToLinearIndex(tmpIndex);
@@ -215,10 +220,115 @@ void OccupanyMapping(std::vector<GeneralLaserScan>& scans, std::vector<Eigen::Ve
             pMapHits[linear_index]++;
 #endif //PROBLEM_2
 
+#ifdef PROBLEM_3
+            // tsdf 截断距离
+            double cut_off_dis = 2 * mapParams.resolution;
+            double far_dis;
+
+            // 计算远点
+            far_dis = dist + 3 * cut_off_dis;
+
+            double far_laser_x = far_dis * cos(angle);
+            double far_laser_y = far_dis * sin(angle);
+
+            double far_world_x = cos(theta) * far_laser_x - sin(theta) * far_laser_y + robotPose(0);
+            double far_world_y = sin(theta) * far_laser_x + cos(theta) * far_laser_y + robotPose(1);
+
+            GridIndex far_grid_x_y = ConvertWorld2GridIndex(far_world_x, far_world_y);
+
+            std::vector<GridIndex> near_grids;
+            // 如果增加的距离是远点超出地图范围，那么就是用激光点作为远点
+            if (isValidGridIndex(far_grid_x_y) == false) {
+                near_grids = TraceLine(robotPose_grid.x, robotPose_grid.y, grid_x_y.x, grid_x_y.y);
+            } else {
+                near_grids = TraceLine(robotPose_grid.x, robotPose_grid.y, far_grid_x_y.x, far_grid_x_y.y);
+            }
+
+            // 更新laser_dist附近的栅格
+            for (size_t j = 0; j < near_grids.size(); j++) {
+                GridIndex tmpIndex = near_grids[j];
+                double grid_dis = sqrt(pow(tmpIndex.x - robotPose_grid.x, 2) + pow(tmpIndex.y - robotPose_grid.y, 2));
+
+                // 从gridmap尺度转化为实际地图尺度
+                grid_dis *= mapParams.resolution;
+
+                // 计算tsdf
+                double tsdf = max(-1.0, min(1.0, (dist - grid_dis) / cut_off_dis));
+
+                int linearIndex = GridIndexToLinearIndex(tmpIndex);
+
+                // 更新TSDF
+                pMapTSDF[linearIndex] = (pMapW[linearIndex] * pMapTSDF[linearIndex] + tsdf) / (pMapW[linearIndex] + 1);
+                pMapW[linearIndex] += 1;
+                // cout << "sdf: " << dist - grid_dis << endl;
+                // cout << "tsdf:     " << tsdf << endl;
+                // cout << "grid_dis: " << grid_dis << endl;
+            }
+            // cout << "laser_dis: " << dist << endl;
+            // cout << "----------" << endl;
+#endif //PROBLEM_3
+
             //end of TODO
         }
     }
+
     //start of TODO 通过计数建图算法或TSDF算法对栅格进行更新（2,3题内容）
+#ifdef PROBLEM_2
+    for (int i = 0; i < mapParams.width * mapParams.height; i++) {
+        if (pMapHits[i] + pMapMisses[i] == 0) {
+            pMap[i] = 50;
+            continue;
+        }
+
+        double ratio = pMapHits[i] * 1.0 / (pMapHits[i] + pMapMisses[i]);
+        double ratio_threshold = 0.3;
+
+        if (ratio > ratio_threshold) {
+            pMap[i] = 100;
+        } else if (ratio <= ratio_threshold) {
+            pMap[i] = 0;
+        }
+    }
+#endif //PROBLEM_2
+
+#ifdef PROBLEM_3
+    // BFS查找边界
+    pMapIsAccessed = new int[mapParams.width * mapParams.height];
+    std::vector<std::pair<int, int>> directions = { { 1, 0 }, { 0, 1 }, { -1, 0 }, { 0, -1 } };
+    queue<GridIndex> q;
+    q.push(GridIndex(0, 0));
+
+    while (!q.empty()) {
+        int size = q.size();
+        for (size_t i = 0; i < size; i++) {
+            GridIndex node = q.front();
+            q.pop();
+            for (size_t k = 0; k < 4; k++) {
+                pair<int, int> dir = directions[k];
+                int tmpx = node.x + dir.first;
+                int tmpy = node.y + dir.second;
+                int linearIndex = tmpy + tmpx * mapParams.width;
+                int centerIndex = node.y + node.x * mapParams.width;
+
+                if (tmpx >= 0 && tmpx < mapParams.height && tmpy >= 0 && tmpy < mapParams.width && pMapIsAccessed[linearIndex] == 0) {
+                    // 对于边界点的处理
+                    if (pMapTSDF[linearIndex] * pMapTSDF[centerIndex] < 0) {
+                        // 选择pMapTSDF绝对值较小的一个栅格，认为是障碍物所在的栅格
+                        if (abs(pMapTSDF[linearIndex]) < abs(pMapTSDF[centerIndex])) {
+                            pMap[linearIndex] = 100;
+                        } else {
+                            pMap[centerIndex] = 100;
+                        }
+                    }
+                    // 访问过的点不再进行访问
+                    pMapIsAccessed[linearIndex] = 1;
+                    q.push(GridIndex(tmpx, tmpy));
+                }
+            }
+        }
+    }
+#endif //PROBLEM_3
+
     //end of TODO
     std::cout << "建图完毕" << std::endl;
 }
@@ -243,8 +353,6 @@ void PublishMap(ros::Publisher& map_pub)
     rosMap.info.height = mapParams.height;
     rosMap.data.resize(rosMap.info.width * rosMap.info.height);
 
-#ifdef PROBLEM_1
-    int cnt = 0;
     for (int i = 0; i < mapParams.width * mapParams.height; i++) {
         if (pMap[i] == 50) {
             rosMap.data[i] = -1;
@@ -262,26 +370,6 @@ void PublishMap(ros::Publisher& map_pub)
     //         rosMap.data[i] = 100;
     //     }
     // }
-#endif //PROBLEM_1
-
-#ifdef PROBLEM_2
-
-    for (int i = 0; i < mapParams.width * mapParams.height; i++) {
-        if (pMapHits[i] + pMapMisses[i] == 0) {
-            rosMap.data[i] = -1.0;
-            continue;
-        }
-
-        double ratio = pMapHits[i] * 1.0 / (pMapHits[i] + pMapMisses[i]);
-        double ratio_threshold = 0.4;
-
-        if (ratio > ratio_threshold) {
-            rosMap.data[i] = 100;
-        } else if (ratio <= ratio_threshold) {
-            rosMap.data[i] = 0;
-        }
-    }
-#endif //PROBLEM_2
 
     rosMap.header.stamp = ros::Time::now();
     rosMap.header.frame_id = "map";
